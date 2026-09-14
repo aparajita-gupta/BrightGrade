@@ -1,0 +1,7 @@
+# Copy this file to pi_config.py (same folder) and fill in your real
+# token. pi_config.py is what pi_display.py imports -- keep this
+# .example file as the generic template, pi_config.py as your private
+# copy (this lives on the Pi, separate from this project's Mac-side
+# config.py).
+
+TODOIST_API_TOKEN = "your-todoist-api-token"

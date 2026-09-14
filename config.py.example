@@ -1,0 +1,15 @@
+"""
+config.py.example
+
+Copy this to config.py and fill in your real values. config.py itself is
+gitignored so your tokens never get committed.
+"""
+
+# Your personal Brightspace calendar subscription feed. Get this from
+# Brightspace: Calendar page -> Subscribe -> copy the .ics URL.
+BRIGHTSPACE_ICS_URL = "https://purdue.brightspace.com/d2l/le/calendar/feed/user/feed.ics?token=YOUR_TOKEN_HERE"
+TODOIST_API_TOKEN = "your-todoist-api-token"
+
+# Get a key at aistudio.google.com -- used for AI-generated Todoist titles
+# (todoist_sync.py --ai-titles). Leave blank to disable that feature.
+GEMINI_API_KEY = "your-gemini-api-key"

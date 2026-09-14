@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.aparajita.assignment-pipeline</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/aparajita/Documents/projects/python_backend/run_pipeline.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>20</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- Also run once at login/reboot, so a run missed because the Mac was
+       asleep at 8 PM still happens shortly after next login instead of
+       being silently skipped until the next scheduled time. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/aparajita/Documents/projects/python_backend/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/aparajita/Documents/projects/python_backend/launchd.err</string>
+</dict>
+</plist>

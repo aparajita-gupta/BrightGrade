@@ -1,0 +1,15 @@
+[Unit]
+Description=Ambient Todoist deadline display
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pi_display
+ExecStart=/usr/bin/python3 /home/pi/pi_display/pi_display.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

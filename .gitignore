@@ -1,0 +1,29 @@
+# Secrets -- never commit real config, only config.py.example
+config.py
+esp32_display/secrets.h
+raspberry_pi_display/pi_config.py
+
+# Saved login sessions (equivalent to credentials)
+brightspace_session.json
+gradescope_session.json
+
+# Personal data generated at runtime -- your assignments/tasks, not source
+assignments.json
+todoist_synced.json
+todoist_format_preference.json
+
+# Logs
+*.log
+launchd.err
+launchd.log
+
+# Generated reports (contain your real course/assignment data)
+testing_report.pdf
+workflow_diagram.pdf
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
