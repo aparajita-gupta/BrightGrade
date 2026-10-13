@@ -608,7 +608,7 @@ def sync_assignments(
 ) -> dict[str, int]:
     store = load_store()
     synced = load_synced()
-    stats = {"marked": 0, "created": 0, "skipped": 0, "errors": 0}
+    stats = {"marked": 0, "created": 0, "skipped": 0, "errors": 0, "created_titles": []}
 
     first_run = not synced.get("initialized") and SYNCED_FILE.exists() is False
     if first_run and not init_only and not backfill:
@@ -769,6 +769,8 @@ def sync_assignments(
                 "todoist_task_id": task.get("id"),
             }
             stats["created"] += 1
+            stats["created_titles"].append(content)
+            print(f"  + {content}")
             logging.info(f"Created Todoist task for {key}: {content}")
             time.sleep(0.15)
         except TodoistError as exc:
@@ -808,6 +810,8 @@ def sync_assignments(
                     "todoist_task_id": task.get("id"),
                 }
             stats["created"] += 1
+            stats["created_titles"].append(f"{content} (recurring)")
+            print(f"  + {content} (recurring, {len(member_keys)}x)")
             logging.info(
                 f"Created recurring Todoist task '{content}' ({due_string}) "
                 f"covering {len(member_keys)} instance(s): {member_keys}"
@@ -893,9 +897,15 @@ def main():
         # especially on the unattended launchd run nobody is watching.
         if not args.dry_run:
             if stats["created"] > 0:
+                # A bare count told you SOMETHING happened but not what --
+                # list the actual titles (same preview-then-"+N more"
+                # pattern as pipeline.py's nudge notification) so you can
+                # tell at a glance whether it's what you expected.
+                titles = stats["created_titles"]
+                preview = ", ".join(titles[:5]) + (f" +{len(titles) - 5} more" if len(titles) > 5 else "")
                 notify(
-                    "Todoist sync complete",
-                    f"{stats['created']} task(s) pushed to Todoist."
+                    f"{stats['created']} task(s) pushed to Todoist",
+                    preview
                     + (f" ({stats['errors']} error(s))" if stats["errors"] else ""),
                 )
             elif stats["errors"] > 0:
