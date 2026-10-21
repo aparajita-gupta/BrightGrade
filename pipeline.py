@@ -25,8 +25,9 @@ import argparse
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from plyer import notification  # pip install plyer
 from playwright.sync_api import sync_playwright
@@ -48,10 +49,11 @@ from gradescope_reader import (
 )
 
 from fetch_ics import fetch_events
-from config import BRIGHTSPACE_ICS_URL as ICS_URL
+from config import BRIGHTSPACE_ICS_URL as ICS_URL, TODOIST_API_TOKEN
 
 STORE_FILE = Path(__file__).parent / "assignments.json"
 LOG_FILE = Path(__file__).parent / "pipeline.log"
+SYNCED_FILE = Path(__file__).parent / "todoist_synced.json"
 
 # "Nudge me" reminder thresholds for permanently undated items.
 NUDGE_AFTER_DAYS = 14
@@ -101,10 +103,95 @@ def extract_course_from_location(location: str) -> str | None:
     return normalize_course_name(location)
 
 
+GRADESCOPE_TZ = ZoneInfo("America/New_York")
+GRADESCOPE_BARE_DATE_FORMATS = ("%b %d at %I:%M%p", "%b %d at %I:%M %p")
+
+
+def resolve_gradescope_due_date(raw: str, reference: date | None = None) -> str:
+    """Gradescope's due-date text carries no year ('Feb 20 at 6:30PM'),
+    and this is only ever called from inside the per-course cross-check
+    loop -- i.e. for a course confirmed actively paired/re-scraped THIS
+    run, never a stale/abandoned one. Default to the reference date's
+    year; if that lands more than ~4 months in the past, it's not a
+    recently-graded item from the active term, it's next year's instance
+    of a not-yet-dated item (confirmed real case: ECE 362's Lab 4-10
+    showing 'Feb'/'Mar'/'Apr' while Lab 3, sequentially earlier in the
+    SAME course, was already correctly in September -- a lab due before
+    the semester even started makes no sense). Converts to an explicit
+    UTC-ISO string so it's never ambiguous again once stored, instead of
+    re-guessing the year again at push time."""
+    reference = reference or date.today()
+    for fmt in GRADESCOPE_BARE_DATE_FORMATS:
+        try:
+            parsed = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        candidate = parsed.replace(year=reference.year)
+        if (reference - candidate.date()).days > 120:
+            candidate = candidate.replace(year=candidate.year + 1)
+        return str(candidate.replace(tzinfo=GRADESCOPE_TZ).astimezone(timezone.utc))
+    return raw  # unrecognized format -- pass through rather than lose it
+
+
+def _load_synced_entry(key: str) -> dict | None:
+    if not SYNCED_FILE.exists():
+        return None
+    try:
+        return json.loads(SYNCED_FILE.read_text()).get("synced_keys", {}).get(key)
+    except Exception:
+        return None
+
+
+def refresh_gradescope_due_date(key: str, existing: dict, new_raw: str, course_key: str) -> bool:
+    """Gradescope doesn't post every lab's real due date up front -- it
+    rolls them out progressively as the semester goes (confirmed by you
+    directly: 'it gets updated each week for the due date to be new for
+    each week and its corresponding lab'). The old 'never touch an
+    already-set due date' policy assumed a date, once resolved, was
+    final -- true for Brightspace/ICS dates, wrong for Gradescope ones,
+    which can legitimately change. Only ever called for sources that
+    carry 'gradescope' in them, never for ics/syllabus_pdf-only dates.
+
+    If the item was already pushed to Todoist under the old (now stale)
+    date, update that live task too -- otherwise fixing assignments.json
+    alone would leave the real Todoist task silently showing the wrong
+    date forever."""
+    old = existing.get("due_date")
+    if old == new_raw:
+        return False
+    existing["due_date"] = new_raw
+    logging.info(f"{course_key}: refreshed due date for {key!r} ({old!r} -> {new_raw!r})")
+
+    synced_entry = _load_synced_entry(key)
+    task_id = synced_entry.get("todoist_task_id") if synced_entry else None
+    if task_id and TODOIST_API_TOKEN:
+        try:
+            from todoist_sync import TodoistClient, build_due_fields  # lazy: avoids a module-load-time circular import
+
+            client = TodoistClient(TODOIST_API_TOKEN)
+            client.update_task(task_id, **build_due_fields(new_raw))
+            logging.info(f"{course_key}: updated live Todoist task {task_id} to match")
+        except Exception as exc:
+            logging.error(f"{course_key}: failed to update live Todoist task {task_id}: {exc}")
+    return True
+
+
+# Brightspace's ICS feed emits a separate calendar event for when
+# something becomes AVAILABLE (opens up), not just when it's DUE --
+# confirmed real data: "Request for Computer - Available", "2025 Fall
+# Exam 1 - Availability Ends", etc. sitting in assignments.json as if
+# they were real due-date tasks. These aren't deadlines, skip them
+# entirely rather than just not pushing them, so they don't pollute the
+# dashboard/nudge system either.
+AVAILABILITY_SUFFIX_RE = re.compile(r"-\s*(Available|Availability Ends)\s*$", re.IGNORECASE)
+
+
 def run_ics_step(store: dict) -> int:
     new_count = 0
     events = fetch_events(ICS_URL)
     for event in events:
+        if AVAILABILITY_SUFFIX_RE.search(event["title"]):
+            continue
         key = f"ics::{event['title']}::{event['start']}"
         course = extract_course_from_location(event.get("location", ""))
         if key not in store["assignments"]:
@@ -213,7 +300,7 @@ def run_cross_check_step(store: dict, *, interactive: bool = True) -> int:
                 existing = store["assignments"].get(key)
 
                 match = best_match(item["title"], gs_items, key="title")
-                due_date = match["due_date_raw"] if match else None
+                due_date = resolve_gradescope_due_date(match["due_date_raw"]) if match else None
 
                 if existing is None:
                     store["assignments"][key] = {
@@ -226,6 +313,9 @@ def run_cross_check_step(store: dict, *, interactive: bool = True) -> int:
                     existing["due_date"] = due_date
                     existing["source"] = "brightspace_gradebook+gradescope"
                     new_or_resolved += 1
+                elif due_date is not None and "gradescope" in existing.get("source", ""):
+                    if refresh_gradescope_due_date(key, existing, due_date, course_key):
+                        new_or_resolved += 1
 
             # Independent Gradescope discovery: the loop above only ever
             # looks at Gradescope for items Brightspace's gradebook
@@ -246,6 +336,7 @@ def run_cross_check_step(store: dict, *, interactive: bool = True) -> int:
                 if k.startswith(f"{course_key}::") or v.get("course") == course_key
             }
             for gs_item in gs_items:
+                resolved_due = resolve_gradescope_due_date(gs_item["due_date_raw"])
                 match_key = best_match(
                     gs_item["title"],
                     [{"key": k, "title": v["title"]} for k, v in known_for_course.items()],
@@ -255,23 +346,29 @@ def run_cross_check_step(store: dict, *, interactive: bool = True) -> int:
                     # Already known -- if it's still undated (e.g. found
                     # earlier via Brightspace with no Gradescope match at
                     # the time, or added here before Gradescope had
-                    # posted a real date), fill it in now. Consistent
-                    # with every other merge path in this codebase: an
-                    # ALREADY-set date is never overwritten, even a
-                    # stale/wrong one -- clear it manually if Gradescope
-                    # corrects a date that was already (wrongly) filled.
+                    # posted a real date), fill it in now. If it already
+                    # HAS a date, Gradescope itself can still revise it
+                    # (confirmed: labs' due dates get posted progressively,
+                    # not all up front) -- refresh rather than treating the
+                    # first-seen date as permanent, but only for
+                    # gradescope-sourced dates; see refresh_gradescope_due_date.
                     existing = store["assignments"][match_key["key"]]
                     if existing.get("due_date") is None:
-                        existing["due_date"] = gs_item["due_date_raw"]
+                        existing["due_date"] = resolved_due
                         existing["source"] = f"{existing['source']}+gradescope_direct"
                         new_or_resolved += 1
+                    elif "gradescope" in existing.get("source", ""):
+                        if refresh_gradescope_due_date(
+                            match_key["key"], existing, resolved_due, course_key
+                        ):
+                            new_or_resolved += 1
                     continue
                 key = f"{course_key}::{gs_item['title'].lower()}"
                 if key in store["assignments"]:
                     continue
                 store["assignments"][key] = {
                     "title": gs_item["title"],
-                    "due_date": gs_item["due_date_raw"],
+                    "due_date": resolved_due,
                     "source": "gradescope_direct",
                 }
                 new_or_resolved += 1

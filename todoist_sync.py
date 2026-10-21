@@ -181,6 +181,23 @@ class TodoistClient:
             body["labels"] = labels
         return self._request("POST", "/tasks", json_body=body)
 
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        due_string: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {}
+        if due_string:
+            body["due_string"] = due_string
+        if due_date:
+            body["due_date"] = due_date
+        if due_datetime:
+            body["due_datetime"] = due_datetime
+        return self._request("POST", f"/tasks/{task_id}", json_body=body)
+
 
 def load_json(path: Path, default: dict) -> dict:
     if path.exists():
@@ -262,7 +279,17 @@ def parse_bare_month_day(text: str) -> datetime | None:
     the current calendar year -- these dates are always within the
     active academic term, and many are already-past (graded) items,
     so rolling a past date forward to next year would wrongly mark
-    finished assignments as upcoming."""
+    finished assignments as upcoming.
+
+    Deliberately does NOT try to be smarter than this (e.g. "roll
+    forward if far enough in the past") -- this function has no idea
+    whether a given item's course is still actively enrolled/scraped or
+    a long-abandoned one (confirmed real risk: me270's leftover Jun/Jul
+    dates from a finished summer course, untouched since August, would
+    get wrongly resurrected into next year). That smarter resolution
+    happens once, with real context, at scrape time -- see
+    pipeline.py's resolve_gradescope_year().
+    """
     for fmt in BARE_DATE_FORMATS:
         try:
             parsed = datetime.strptime(text, fmt)
